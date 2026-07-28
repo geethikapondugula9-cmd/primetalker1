@@ -25,6 +25,7 @@ class VoiceProcessor {
         this.userType = null;
         this.myLanguage = null;
         this.myName = null;
+        this.myVoice = "male";
 
         // STT state
         this.recognizeStream = null;
@@ -65,6 +66,7 @@ class VoiceProcessor {
                 this.roomId = msg.roomId;
                 this.userType = msg.userType;
                 this.myLanguage = msg.myLanguage;
+                this.myVoice = msg.myVoice || "male";
                 this.myName = msg.myName || "User";
                 console.log(`✅ ${this.userType} connected in ${this.roomId} (${this.myLanguage})`);
                 this._registerConnection();
@@ -502,6 +504,10 @@ class VoiceProcessor {
         };
 
         const base = (lang || "en").split("-")[0];
+        // const voice = {
+        //     ...(voices[base] || { languageCode: lang }),
+        //     ssmlGender: this.myVoice === "female" ? "FEMALE" : "MALE"
+        // };
         const voice = voices[base] || { languageCode: lang, ssmlGender: "NEUTRAL" };
 
         // Check TTS cache first
