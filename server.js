@@ -105,7 +105,7 @@ app.post("/create-room", (req, res) => {
 // Join an existing room (allows re-joining)
 app.post("/join-room", (req, res) => {
     try {
-        const { roomId, participantLanguage, participantName } = req.body;
+        const { roomId, participantLanguage, participantVoice, participantName } = req.body;
         const session = activeSessions.get(roomId);
 
         if (!session) {
@@ -114,6 +114,7 @@ app.post("/join-room", (req, res) => {
 
         // Allow re-joining - update participant info
         session.participantLanguage = participantLanguage;
+        session.participantVoice = participantVoice;
         session.participantName = participantName;
         activeSessions.set(roomId, session);
 
