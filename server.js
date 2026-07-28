@@ -1,5 +1,5 @@
 // server.js - Express + WebSocket Server for Live Translation
-if (process.env.NODE_ENV !== "production") {
+if (process.env.NODE_ENV !== "production") { 
     require("dotenv").config();
 }
 
@@ -89,6 +89,7 @@ app.post("/create-room", (req, res) => {
             participantName: null,
             callerConnection: null,
             receiverConnection: null,
+            chatMessages: [],
             createdAt: Date.now()
         });
 
