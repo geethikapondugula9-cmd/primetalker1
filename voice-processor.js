@@ -1,21 +1,77 @@
 // voice-processor.js - Robust Live Translation with Sentence Accumulation
+const fs = require("fs");
+const path = require("path");
 const speech = require("@google-cloud/speech");
 const textToSpeech = require("@google-cloud/text-to-speech");
 const { Translate } = require("@google-cloud/translate").v2;
 
-// Support for cloud deployment: read credentials from env var
-let googleCredentials = null;
-if (process.env.GOOGLE_CREDENTIALS) {
-    googleCredentials = JSON.parse(process.env.GOOGLE_CREDENTIALS);
+function loadGoogleCredentials() {
+    const candidates = [];
+
+    if (process.env.GOOGLE_CREDENTIALS) {
+        candidates.push({ source: "GOOGLE_CREDENTIALS", value: process.env.GOOGLE_CREDENTIALS });
+    }
+
+    if (process.env.GOOGLE_APPLICATION_CREDENTIALS) {
+        candidates.push({ source: "GOOGLE_APPLICATION_CREDENTIALS", value: process.env.GOOGLE_APPLICATION_CREDENTIALS });
+    }
+
+    const defaultCredentialPath = path.resolve(__dirname, "google-credentials.json");
+    candidates.push({ source: "default file", value: defaultCredentialPath });
+
+    for (const candidate of candidates) {
+        if (!candidate.value) continue;
+
+        if (typeof candidate.value === "string" && candidate.value.trim().startsWith("{")) {
+            try {
+                const parsed = JSON.parse(candidate.value);
+                if (parsed && parsed.client_email) {
+                    console.log(`✅ Google credentials loaded from ${candidate.source}`);
+                    return parsed;
+                }
+            } catch (e) {
+                console.warn(`⚠️ Failed to parse Google credentials from ${candidate.source}:`, e.message);
+            }
+        }
+
+        const resolvedPath = path.isAbsolute(candidate.value)
+            ? candidate.value
+            : path.resolve(__dirname, candidate.value);
+
+        if (fs.existsSync(resolvedPath)) {
+            try {
+                const fileContent = fs.readFileSync(resolvedPath, "utf8");
+                const parsed = JSON.parse(fileContent);
+                if (parsed && parsed.client_email) {
+                    process.env.GOOGLE_APPLICATION_CREDENTIALS = resolvedPath;
+                    console.log(`✅ Google credentials loaded from ${resolvedPath}`);
+                    return parsed;
+                }
+            } catch (e) {
+                console.warn(`⚠️ Failed to load Google credentials from ${resolvedPath}:`, e.message);
+            }
+        }
+    }
+
+    console.warn("⚠️ No valid Google credentials found. Set GOOGLE_CREDENTIALS or GOOGLE_APPLICATION_CREDENTIALS.");
+    return null;
 }
+
+let googleCredentials = loadGoogleCredentials();
 
 class VoiceProcessor {
     constructor(websocket, activeSessions) {
         this.ws = websocket;
         this.activeSessions = activeSessions;
 
-        // Google Cloud clients (use env credentials if available)
-        const clientConfig = googleCredentials ? { credentials: googleCredentials } : {};
+        // Google Cloud clients (use credentials from file or environment)
+        const clientConfig = googleCredentials
+            ? {
+                credentials: googleCredentials,
+                projectId: googleCredentials.project_id || undefined
+            }
+            : {};
+
         this.speechClient = new speech.SpeechClient(clientConfig);
         this.ttsClient = new textToSpeech.TextToSpeechClient(clientConfig);
         this.translateClient = new Translate(googleCredentials ? { credentials: googleCredentials } : {});
@@ -70,6 +126,7 @@ class VoiceProcessor {
                 this.myName = msg.myName || "User";
                 console.log(`✅ ${this.userType} connected in ${this.roomId} (${this.myLanguage})`);
                 this._registerConnection();
+                this._sendChatHistory();
                 this._notifyPartner("user_joined", { name: this.myName, language: this.myLanguage });
 
                 // Pre-warm STT stream IMMEDIATELY
@@ -86,6 +143,10 @@ class VoiceProcessor {
                 break;
             case "audio":
                 this._processAudio(msg.audio);
+                break;
+            case "chat:send":
+                console.log("📨 Chat received:", msg);
+                await this._handleChatMessage(msg);
                 break;
             case "disconnect":
             case "stop":
@@ -106,6 +167,18 @@ class VoiceProcessor {
 
         this.lastAudioTime = Date.now(); // Track when we last received audio
         const buffer = Buffer.from(base64Audio, "base64");
+        // === BYPASS: same language, skip STT/Translate/TTS entirely ===
+        const partner = this._getPartner();
+        if (partner && this._isSameLanguage(partner)) {
+            if (partner.ws?.readyState === 1) {
+                partner.ws.send(JSON.stringify({
+                    event: "audio_direct",
+                    audio: base64Audio
+                }));
+            }
+            return; // never touches gRPC/STT — this is where the cost/latency savings come from
+        }
+
 
         // If currently starting, buffer the audio so we don't lose the first words
         if (this.isStartingStream) {
@@ -380,9 +453,21 @@ class VoiceProcessor {
                 return;
             }
 
-            // Step 1: Translate (with cache)
+            // Step 1: Translate only if languages are different
+            // Step 1: Check if translation is needed
+            const fromLang = (this.myLanguage || "en").split("-")[0];
+            const toLang = (partner.myLanguage || "en").split("-")[0];
+
             const t0 = Date.now();
-            const translated = await this._translate(text, this.myLanguage, partner.myLanguage);
+            let translated;
+
+            if (fromLang === toLang) {
+                console.log(`✅ Same language (${fromLang}) detected. Skipping translation.`);
+                translated = text;
+            } else {
+                translated = await this._translate(text, fromLang, toLang);
+            }
+
             const translateMs = Date.now() - t0;
 
             // Send translation text to both users immediately (don't wait for TTS)
@@ -392,7 +477,8 @@ class VoiceProcessor {
                 translatedText: translated,
                 fromUser: this.userType,
                 fromLanguage: this.myLanguage,
-                toLanguage: partner.myLanguage
+                toLanguage: partner.myLanguage,
+                translationSkipped: fromLang === toLang
             };
             this._sendToUI(data);
             partner._sendToUI(data);
@@ -418,6 +504,60 @@ class VoiceProcessor {
         }
     }
 
+    async _handleChatMessage(payload) {
+        if (!payload?.message) return;
+
+        const session = this.activeSessions.get(this.roomId);
+        if (!session) return;
+
+        const messageId = payload.messageId || `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        const senderId = payload.senderId || `${this.roomId}-${this.userType}`;
+        const senderName = payload.senderName || this.myName || "User";
+        const originalMessage = payload.message;
+        const sourceLanguage = payload.senderLanguage || this.myLanguage || "en";
+
+        const senderMessage = {
+            id: messageId,
+            senderId,
+            senderName,
+            originalMessage,
+            translatedMessage: originalMessage,
+            sourceLanguage,
+            targetLanguage: sourceLanguage,
+            timestamp: Date.now(),
+            isLocal: true,
+        };
+
+        const sessionMessages = session.chatMessages || [];
+        sessionMessages.push(senderMessage);
+        if (sessionMessages.length > 100) {
+            sessionMessages.splice(0, sessionMessages.length - 100);
+        }
+        session.chatMessages = sessionMessages;
+
+        this._sendToUI({ event: "chat:receive", message: senderMessage });
+
+        const partner = this.userType === "caller"
+            ? session.receiverConnection
+            : session.callerConnection;
+        console.log("My language:", this.myLanguage);
+        console.log("Partner language:", partner?.myLanguage);
+        if (!partner?.myLanguage) return;
+        console.log("Source Language:", sourceLanguage);
+        console.log("Target Language:", partner.myLanguage);
+        console.log("Same Language:", sourceLanguage === partner.myLanguage);
+
+        const translatedMessage = await this._translate(originalMessage, sourceLanguage, partner.myLanguage);
+        const partnerMessage = {
+            ...senderMessage,
+            translatedMessage,
+            targetLanguage: partner.myLanguage,
+            isLocal: false,
+        };
+
+        partner._sendToUI({ event: "chat:receive", message: partnerMessage });
+    }
+
     async _translate(text, from, to) {
         const fromLang = (from || "en").split("-")[0];
         const toLang = (to || "en").split("-")[0];
@@ -431,6 +571,11 @@ class VoiceProcessor {
         }
 
         try {
+            console.log("Translating:", {
+                text,
+                from,
+                to
+            });
             const [result] = await this.translateClient.translate(text, { from: fromLang, to: toLang });
 
             // Store in cache (evict oldest if full)
@@ -509,7 +654,6 @@ class VoiceProcessor {
         //     ssmlGender: this.myVoice === "female" ? "FEMALE" : "MALE"
         // };
         const voice = voices[base] || { languageCode: lang, ssmlGender: "NEUTRAL" };
-
         // Check TTS cache first
         const ttsCacheKey = `${text}|${base}`;
         if (this.ttsCache.has(ttsCacheKey)) {
@@ -602,6 +746,13 @@ class VoiceProcessor {
         } catch (e) { }
     }
 
+    _sendChatHistory() {
+        const session = this.activeSessions.get(this.roomId);
+        if (!session) return;
+        const history = (session.chatMessages || []).slice(-50);
+        this._sendToUI({ event: "chat:history", messages: history });
+    }
+
     _notifyPartner(event, data) {
         const session = this.activeSessions.get(this.roomId);
         if (!session) return;
@@ -609,6 +760,18 @@ class VoiceProcessor {
         if (partner?.ws?.readyState === 1) {
             partner.ws.send(JSON.stringify({ event, ...data }));
         }
+    }
+
+    _getPartner() {
+        const session = this.activeSessions.get(this.roomId);
+        if (!session) return null;
+        return this.userType === "caller" ? session.receiverConnection : session.callerConnection;
+    }
+
+    _isSameLanguage(partner) {
+        const a = (this.myLanguage || "en").split("-")[0];
+        const b = (partner.myLanguage || "en").split("-")[0];
+        return a === b;
     }
 
     async cleanup() {
