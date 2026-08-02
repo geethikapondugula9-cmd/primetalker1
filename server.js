@@ -1,6 +1,8 @@
 // server.js - Express + WebSocket Server for Live Translation
-if (process.env.NODE_ENV !== "production") { 
+if (process.env.NODE_ENV !== "production") {
     require("dotenv").config();
+    console.log("PORT =", process.env.PORT);
+    console.log("NODE_ENV =", process.env.NODE_ENV);
 }
 
 // Force immediate log output
@@ -20,9 +22,11 @@ app.use(express.json());
 
 // CORS - Allow cross-origin requests
 app.use((req, res, next) => {
+    console.log("🌍 CORS Middleware:", req.method, req.url);
     res.header("Access-Control-Allow-Origin", "*");
     res.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
-    res.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept");
+    res.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, Authorization, ngrok-skip-browser-warning");
+    res.header("Access-Control-Expose-Headers", "Content-Type");
     if (req.method === "OPTIONS") {
         return res.sendStatus(200);
     }
@@ -135,11 +139,21 @@ app.post("/join-room", (req, res) => {
 // Get room info
 app.get("/room-info", (req, res) => {
     const roomId = req.query.roomId;
+
+    console.log("================================");
+    console.log("📡 /room-info called");
+    console.log("Requested Room:", roomId);
+    console.log("Active Rooms:", [...activeSessions.keys()]);
+    console.log("================================");
+
     const session = activeSessions.get(roomId);
 
     if (!session) {
+        console.log("❌ Room NOT FOUND");
         return res.status(404).json({ error: "Room not found" });
     }
+
+    console.log("✅ Room FOUND");
 
     res.json({
         creatorLanguage: session.creatorLanguage,
@@ -203,11 +217,15 @@ wss.on("connection", (ws, req) => {
         }
     });
 
-    ws.on("close", () => {
+    ws.on("close", (code, reason) => {
+        console.log("==================================");
         console.log("❌ WebSocket closed");
+        console.log("Close Code:", code);
+        console.log("Reason:", reason.toString());
+        console.log("==================================");
+
         processor.cleanup();
     });
-
     ws.on("error", (err) => {
         console.error("WebSocket error:", err.message);
         processor.cleanup();
