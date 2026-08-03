@@ -66,6 +66,13 @@
     </div>
 
     <script>
+        function getApiBase() {
+            if ((window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') && window.location.port === '5173') {
+                return 'http://localhost:8080';
+            }
+            return window.location.origin;
+        }
+
         const urlParams = new URLSearchParams(window.location.search);
         const roomId = urlParams.get('room');
 
@@ -86,7 +93,7 @@
             btn.innerHTML = '<span class="loading"></span> Joining...';
 
             try {
-                const response = await fetch('/join-room', {
+                const response = await fetch(`${getApiBase()}/join-room`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({

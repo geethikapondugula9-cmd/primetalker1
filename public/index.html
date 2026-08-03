@@ -69,6 +69,13 @@
     </div>
 
     <script>
+        function getApiBase() {
+            if ((window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') && window.location.port === '5173') {
+                return 'http://localhost:8080';
+            }
+            return window.location.origin;
+        }
+
         const createRoomBtn = document.getElementById('createRoomBtn');
         const shareCard = document.getElementById('shareCard');
         const shareLink = document.getElementById('shareLink');
@@ -85,7 +92,7 @@
             createRoomBtn.innerHTML = '<span class="loading"></span> Creating...';
 
             try {
-                const response = await fetch('/create-room', {
+                const response = await fetch(`${getApiBase()}/create-room`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
