@@ -18,6 +18,12 @@ const { AccessToken } = require('twilio').jwt;
 const { VideoGrant } = AccessToken;
 
 const app = express();
+app.use((req, res, next) => {
+    console.log("========== REQUEST ==========");
+    console.log(req.method, req.originalUrl);
+    console.log("=============================");
+    next();
+});
 app.use(express.json());
 
 // CORS - Allow cross-origin requests
@@ -25,8 +31,7 @@ app.use((req, res, next) => {
     console.log("🌍 CORS Middleware:", req.method, req.url);
     res.header("Access-Control-Allow-Origin", "*");
     res.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
-    res.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, Authorization, ngrok-skip-browser-warning");
-    res.header("Access-Control-Expose-Headers", "Content-Type");
+    res.header("Access-Control-Allow-Headers", "*");
     if (req.method === "OPTIONS") {
         return res.sendStatus(200);
     }
@@ -138,22 +143,26 @@ app.post("/join-room", (req, res) => {
 
 // Get room info
 app.get("/room-info", (req, res) => {
+
+    console.log("========== REQUEST ==========");
+    console.log(req.method, req.originalUrl);
+    console.log("=============================");
+
     const roomId = req.query.roomId;
 
-    console.log("================================");
-    console.log("📡 /room-info called");
     console.log("Requested Room:", roomId);
-    console.log("Active Rooms:", [...activeSessions.keys()]);
-    console.log("================================");
+    console.log("Current Rooms:", [...activeSessions.keys()]);
 
     const session = activeSessions.get(roomId);
 
     if (!session) {
-        console.log("❌ Room NOT FOUND");
-        return res.status(404).json({ error: "Room not found" });
+        console.log("ROOM NOT FOUND");
+        return res.status(404).json({
+            error: "Room not found"
+        });
     }
 
-    console.log("✅ Room FOUND");
+    console.log("ROOM FOUND");
 
     res.json({
         creatorLanguage: session.creatorLanguage,
@@ -161,6 +170,7 @@ app.get("/room-info", (req, res) => {
         participantLanguage: session.participantLanguage,
         participantName: session.participantName
     });
+
 });
 
 // Leave room (allows re-joining - only clears user's connection)
@@ -240,11 +250,24 @@ const server = app.listen(PORT, () => {
 
 // Handle WebSocket upgrade for /audio-stream path
 server.on("upgrade", (req, socket, head) => {
+
+    console.log("================================");
+    console.log("UPGRADE REQUEST");
+    console.log("URL:", req.url);
+    console.log("================================");
+
     if (req.url.startsWith("/audio-stream")) {
+
+        console.log("✅ Upgrading WebSocket");
+
         wss.handleUpgrade(req, socket, head, (ws) => {
             wss.emit("connection", ws, req);
         });
+
     } else {
+
+        console.log("❌ Unknown Upgrade:", req.url);
+
         socket.destroy();
     }
 });

@@ -16,7 +16,7 @@ function loadGoogleCredentials() {
         candidates.push({ source: "GOOGLE_APPLICATION_CREDENTIALS", value: process.env.GOOGLE_APPLICATION_CREDENTIALS });
     }
 
-    const defaultCredentialPath = path.resolve(__dirname, "google-credentials.json");
+    const defaultCredentialPath = path.resolve(__dirname, "fir-adb3f-ff27cb34e3fd-firebase-account.json");
     candidates.push({ source: "default file", value: defaultCredentialPath });
 
     for (const candidate of candidates) {
@@ -142,6 +142,8 @@ class VoiceProcessor {
                 }
                 break;
             case "audio":
+                console.log("🎤 AUDIO MESSAGE RECEIVED");
+                console.log("Audio Length:", msg.audio?.length);
                 this._processAudio(msg.audio);
                 break;
             case "chat:send":
@@ -163,6 +165,7 @@ class VoiceProcessor {
     }
 
     async _processAudio(base64Audio) {
+        console.log("🎤 _processAudio() CALLED");
         if (!this.myLanguage) return;
 
         this.lastAudioTime = Date.now(); // Track when we last received audio
@@ -214,6 +217,7 @@ class VoiceProcessor {
         // Send audio to Google
         if (this.recognizeStream) {
             try {
+                console.log("📤 Writing audio to Google:", buffer.length, "bytes");
                 this.recognizeStream.write(buffer);
             } catch (e) {
                 console.error("Write error:", e.message);
@@ -228,6 +232,8 @@ class VoiceProcessor {
         this.isStartingStream = true;
 
         const langCode = this._getLangCode(this.myLanguage);
+        console.log("🌍 Language selected:", this.myLanguage);
+        console.log("🌍 Google language code:", langCode);
 
         try {
             this.recognizeStream = this.speechClient
@@ -242,7 +248,11 @@ class VoiceProcessor {
                     interimResults: true,
                     singleUtterance: false
                 })
-                .on("data", this._handleSTTData)
+                .on("data", (response) => {
+                    console.log("📥 RAW GOOGLE RESPONSE:");
+                    console.dir(response, { depth: null });
+                    this._handleSTTData(response);
+                })
                 .on("error", this._handleSTTError)
                 .on("end", () => {
                     this.isStreaming = false;
@@ -292,6 +302,7 @@ class VoiceProcessor {
     }
 
     _handleSTTData(response) {
+        console.log("📥 STT DATA RECEIVED");
         if (!response.results?.[0]) return;
 
         const result = response.results[0];
