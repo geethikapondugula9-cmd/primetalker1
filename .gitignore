@@ -5,7 +5,7 @@ node_modules/
 .env
 
 # Google credentials (will set as env var on Render)
-google-credentials.json
+fir-adb3f-ff27cb34e3fd-firebase-account.json
 
 # Logs
 *.log
