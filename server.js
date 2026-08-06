@@ -1,6 +1,8 @@
 // server.js - Express + WebSocket Server for Live Translation
 if (process.env.NODE_ENV !== "production") {
     require("dotenv").config();
+    console.log("PORT =", process.env.PORT);
+    console.log("NODE_ENV =", process.env.NODE_ENV);
 }
 
 // Force immediate log output
@@ -26,6 +28,7 @@ app.use(express.json());
 
 // CORS - Allow cross-origin requests
 app.use((req, res, next) => {
+    console.log("🌍 CORS Middleware:", req.method, req.url);
     res.header("Access-Control-Allow-Origin", "*");
     res.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
     res.header("Access-Control-Allow-Headers", "*");
@@ -224,11 +227,15 @@ wss.on("connection", (ws, req) => {
         }
     });
 
-    ws.on("close", () => {
+    ws.on("close", (code, reason) => {
+        console.log("==================================");
         console.log("❌ WebSocket closed");
+        console.log("Close Code:", code);
+        console.log("Reason:", reason.toString());
+        console.log("==================================");
+
         processor.cleanup();
     });
-
     ws.on("error", (err) => {
         console.error("WebSocket error:", err.message);
         processor.cleanup();

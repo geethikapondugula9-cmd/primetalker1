@@ -59,6 +59,18 @@
     </div>
 
     <script>
+        function getApiBase() {
+            if ((window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') && window.location.port === '5173') {
+                return 'http://localhost:8080';
+            }
+            return window.location.origin;
+        }
+
+        function getApiHost() {
+            const url = new URL(getApiBase());
+            return `${url.hostname}${url.port ? ':' + url.port : ''}`;
+        }
+
         // Get session info
         const roomId = sessionStorage.getItem('roomId') || new URLSearchParams(window.location.search).get('room');
         const userType = sessionStorage.getItem('userType') || 'caller';
@@ -105,7 +117,7 @@
 
             // Check room status
             try {
-                const response = await fetch(`/room-info?roomId=${roomId}`);
+                const response = await fetch(`${getApiBase()}/room-info?roomId=${roomId}`);
                 const data = await response.json();
 
                 if (response.ok) {
@@ -134,7 +146,7 @@
 
         function connectWebSocket() {
             const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-            ws = new WebSocket(`${wsProtocol}//${window.location.host}/audio-stream`);
+            ws = new WebSocket(`${wsProtocol}//${getApiHost()}/audio-stream`);
 
             ws.onopen = () => {
                 console.log('WebSocket connected');
@@ -459,7 +471,7 @@
 
                 // Leave room
                 try {
-                    await fetch('/leave-room', {
+                    await fetch(`${getApiBase()}/leave-room`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ roomId })
