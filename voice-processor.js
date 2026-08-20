@@ -496,7 +496,7 @@ class VoiceProcessor {
 
             // Step 2: Generate TTS (with cache)
             const t1 = Date.now();
-            const audio = await this._tts(translated, partner.myLanguage);
+            const audio = await this._tts(translated, partner.myLanguage, partner.myVoice);
             const ttsMs = Date.now() - t1;
 
             if (audio && partner.ws?.readyState === 1) {
@@ -526,7 +526,8 @@ class VoiceProcessor {
         const senderName = payload.senderName || this.myName || "User";
         const originalMessage = payload.message;
         const sourceLanguage = payload.senderLanguage || this.myLanguage || "en";
-
+        console.log("🔤 BACKEND sourceLanguage:", sourceLanguage);
+        console.log("🔤 BACKEND myLanguage:", this.myLanguage);
         const senderMessage = {
             id: messageId,
             senderId,
@@ -603,7 +604,7 @@ class VoiceProcessor {
         }
     }
 
-    async _tts(text, lang) {
+    async _tts(text, lang, speakerVoice) {
         // Comprehensive language support with Neural2 where available
         const voices = {
             // Major World Languages
@@ -660,13 +661,16 @@ class VoiceProcessor {
         };
 
         const base = (lang || "en").split("-")[0];
-        // const voice = {
-        //     ...(voices[base] || { languageCode: lang }),
-        //     ssmlGender: this.myVoice === "female" ? "FEMALE" : "MALE"
-        // };
-        const voice = voices[base] || { languageCode: lang, ssmlGender: "NEUTRAL" };
+
+        const selectedVoice = voices[base] || { languageCode: lang };
+
+        const voice = {
+            languageCode: selectedVoice.languageCode,
+            ssmlGender: speakerVoice === "female" ? "FEMALE" : "MALE"
+        };
+        // const voice = voices[base] || { languageCode: lang, ssmlGender: "NEUTRAL" };
         // Check TTS cache first
-        const ttsCacheKey = `${text}|${base}`;
+        const ttsCacheKey = `${text}|${base}|${speakerVoice}`;
         if (this.ttsCache.has(ttsCacheKey)) {
             console.log(`💾 TTS cache hit`);
             return this.ttsCache.get(ttsCacheKey);
