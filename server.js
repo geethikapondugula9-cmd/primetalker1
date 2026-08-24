@@ -4,6 +4,15 @@ if (process.env.NODE_ENV !== "production") {
     console.log("PORT =", process.env.PORT);
     console.log("NODE_ENV =", process.env.NODE_ENV);
 }
+// =====================================================
+// PRIME TALKER - Supabase connection for email existence check
+// =====================================================
+const { createClient } = require("@supabase/supabase-js");
+
+const supabaseAdmin = createClient(
+    process.env.VITE_SUPABASE_URL,
+    process.env.SUPABASE_SERVICE_ROLE_KEY
+);
 
 // Force immediate log output
 if (process.stdout._handle) process.stdout._handle.setBlocking(true);
@@ -48,6 +57,53 @@ app.get("/health", (req, res) => {
     res.json({ status: "ok", activeRooms: activeSessions.size });
 });
 
+// =====================================================
+// PRIME TALKER - Check whether signup email already exists
+// =====================================================
+app.post("/api/check-email", async (req, res) => {
+    try {
+        const { email } = req.body;
+
+        if (!email) {
+            return res.status(400).json({
+                exists: false,
+                error: "Email is required"
+            });
+        }
+
+        const normalizedEmail = email.trim().toLowerCase();
+
+        // PRIME TALKER - Check existing users using Supabase Admin API
+        const { data, error } = await supabaseAdmin.auth.admin.listUsers({
+            page: 1,
+            perPage: 1000,
+        });
+
+        if (error) {
+            console.error("❌ Email check error:", error);
+            return res.status(500).json({
+                exists: false,
+                error: "Unable to check email"
+            });
+        }
+
+        const userExists = data.users.some(
+            (user) => user.email?.toLowerCase() === normalizedEmail
+        );
+
+        return res.json({
+            exists: userExists
+        });
+
+    } catch (error) {
+        console.error("❌ Check email exception:", error);
+
+        return res.status(500).json({
+            exists: false,
+            error: "Unable to check email"
+        });
+    }
+});
 // =====================================================
 // TWILIO VIDEO TOKEN
 // =====================================================
