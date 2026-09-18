@@ -104,6 +104,79 @@ app.post("/api/check-email", async (req, res) => {
         });
     }
 });
+
+// =====================================================
+// CONTACT US FORM SUBMISSION
+// Target recipient: primecontact@primetalker.com
+// =====================================================
+const fs = require("fs");
+
+app.post("/api/contact", (req, res) => {
+    try {
+        const { firstName, lastName, email, phone, subject, message } = req.body;
+
+        if (!firstName || !email || !message) {
+            return res.status(400).json({
+                success: false,
+                error: "Missing required fields (firstName, email, message)"
+            });
+        }
+
+        const recipientEmail = "primecontact@primetalker.com";
+        const timestamp = new Date().toISOString();
+
+        const submissionData = {
+            id: uuidv4(),
+            timestamp,
+            recipientEmail,
+            sender: {
+                name: `${firstName} ${lastName || ""}`.trim(),
+                email: email.trim(),
+                phone: phone ? phone.trim() : "N/A"
+            },
+            subject: subject ? subject.trim() : "No Subject",
+            message: message.trim()
+        };
+
+        // Format console output
+        console.log("\n====================================================");
+        console.log("📩 NEW CONTACT FORM SUBMISSION RECEIVED");
+        console.log(`Target Recipient : ${submissionData.recipientEmail}`);
+        console.log(`From             : ${submissionData.sender.name} <${submissionData.sender.email}>`);
+        console.log(`Phone            : ${submissionData.sender.phone}`);
+        console.log(`Subject          : ${submissionData.subject}`);
+        console.log(`Timestamp        : ${submissionData.timestamp}`);
+        console.log("Message Content  :");
+        console.log(submissionData.message);
+        console.log("====================================================\n");
+
+        // Persist to local JSON log file
+        const logFilePath = path.join(__dirname, "contact_submissions.json");
+        let submissions = [];
+        if (fs.existsSync(logFilePath)) {
+            try {
+                submissions = JSON.parse(fs.readFileSync(logFilePath, "utf8"));
+            } catch (err) {
+                submissions = [];
+            }
+        }
+        submissions.push(submissionData);
+        fs.writeFileSync(logFilePath, JSON.stringify(submissions, null, 2), "utf8");
+
+        return res.json({
+            success: true,
+            message: `Message queued and logged for ${recipientEmail}`,
+            recipientEmail,
+            submissionId: submissionData.id
+        });
+    } catch (error) {
+        console.error("❌ Error handling contact submission:", error);
+        return res.status(500).json({
+            success: false,
+            error: "Failed to process message"
+        });
+    }
+});
 // =====================================================
 // TWILIO VIDEO TOKEN
 // =====================================================
