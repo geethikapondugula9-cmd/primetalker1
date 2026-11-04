@@ -86,13 +86,15 @@ app.post("/api/check-email", async (req, res) => {
                 error: "Unable to check email"
             });
         }
-
-        const userExists = data.users.some(
+        // PRIME TALKER - Check whether the email belongs to an existing verified or unverified user
+        const matchedUser = data.users.find(
             (user) => user.email?.toLowerCase() === normalizedEmail
         );
-
+        const userExists = !!matchedUser;
+        const emailVerified = matchedUser?.email_confirmed_at != null;
         return res.json({
-            exists: userExists
+            exists: userExists,
+            verified: emailVerified
         });
 
     } catch (error) {
@@ -217,14 +219,17 @@ app.post("/api/video-token", (req, res) => {
 // Create a new room
 app.post("/create-room", (req, res) => {
     try {
-        const { creatorLanguage, creatorName } = req.body;
+        //store creator's selected voice so tts can use the speaker's voice
+        const { creatorLanguage, creatorName, creatorVoice } = req.body;
         const roomId = uuidv4().substring(0, 8);
 
         activeSessions.set(roomId, {
             creatorLanguage,
             creatorName,
+            creatorVoice: creatorVoice || "male",
             participantLanguage: null,
             participantName: null,
+            participantActive: false,
             callerConnection: null,
             receiverConnection: null,
             chatMessages: [],
@@ -250,11 +255,19 @@ app.post("/join-room", (req, res) => {
         if (!session) {
             return res.status(404).json({ error: "Room not found" });
         }
+        // NEW: Allow only one active guest participant at a time
+        if (session.participantActive) {
+            return res.status(409).json({
+                error: "ROOM_FULL",
+                message: "This meeting already has two participants."
+            });
+        }
 
         // Allow re-joining - update participant info
         session.participantLanguage = participantLanguage;
         session.participantVoice = participantVoice;
         session.participantName = participantName;
+        session.participantActive = true;//new: mark participant as active
         activeSessions.set(roomId, session);
 
         console.log("✅ User joined room:", roomId);
@@ -310,13 +323,25 @@ app.post("/leave-room", (req, res) => {
 
         if (session) {
             if (userType === "caller") {
-                // Creator leaving - close all connections and delete room
+                // FEATURE: Notify the guest before closing connections and deleting the room.
+                const guestWs = session.receiverConnection?.ws;
+
+                if (guestWs?.readyState === 1) {
+                    guestWs.send(JSON.stringify({
+                        event: "meeting_ended",
+                        creatorName: session.creatorName || "Creator",
+                        creatorLanguage: session.creatorLanguage || "Unknown"
+                    }));
+                }
+
+                // Creator leaving - close all connections and delete room.
                 if (session.callerConnection?.ws) {
                     session.callerConnection.ws.close();
                 }
                 if (session.receiverConnection?.ws) {
                     session.receiverConnection.ws.close();
                 }
+
                 activeSessions.delete(roomId);
                 console.log("🗑️ Room deleted (creator left):", roomId);
             } else {
@@ -325,6 +350,7 @@ app.post("/leave-room", (req, res) => {
                     session.receiverConnection.ws.close();
                 }
                 session.receiverConnection = null;
+                session.participantActive = false;//new: mark participant as inactive
                 session.participantLanguage = null;
                 session.participantName = null;
                 console.log("👋 Participant left room (room still active):", roomId);
