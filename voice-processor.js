@@ -150,6 +150,17 @@ class VoiceProcessor {
                 console.log("📨 Chat received:", msg);
                 await this._handleChatMessage(msg);
                 break;
+            case "mute_status":
+            case "user_mute":
+            case "user_muted":
+            case "mute_change":
+                console.log(`🎤 Mute status from ${this.userType} (${this.myName}): muted=${msg.muted}`);
+                this._notifyPartner("mute_status", {
+                    userType: this.userType,
+                    sender: this.myName,
+                    muted: typeof msg.muted === "boolean" ? msg.muted : Boolean(msg.muted)
+                });
+                break;
             case "disconnect":
             case "stop":
                 await this.cleanup();
@@ -496,7 +507,8 @@ class VoiceProcessor {
 
             // Step 2: Generate TTS (with cache)
             const t1 = Date.now();
-            const audio = await this._tts(translated, partner.myLanguage, partner.myVoice);
+            //use the speaker selected voice
+            const audio = await this._tts(translated, partner.myLanguage, this.myVoice);
             const ttsMs = Date.now() - t1;
 
             if (audio && partner.ws?.readyState === 1) {
@@ -810,8 +822,16 @@ class VoiceProcessor {
 
         const session = this.activeSessions.get(this.roomId);
         if (session) {
-            if (session.callerConnection === this) session.callerConnection = null;
-            if (session.receiverConnection === this) session.receiverConnection = null;
+            if (session.callerConnection === this) {
+                session.callerConnection = null;
+            }
+
+            if (session.receiverConnection === this) {
+                session.receiverConnection = null;
+                session.participantActive = false; // NEW: Guest disconnected, allow rejoin
+                session.participantLanguage = null;
+                session.participantName = null;
+            }
         }
 
         this._notifyPartner("user_left", {});
