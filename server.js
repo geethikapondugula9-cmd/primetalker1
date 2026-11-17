@@ -107,17 +107,55 @@ app.post("/api/check-email", async (req, res) => {
     }
 });
 
+
 // =====================================================
 // CONTACT US FORM SUBMISSION
+// Direct email delivery using Brevo Transactional Email API
 // Target recipient: primecontact@primetalker.com
 // =====================================================
 const fs = require("fs");
 
-app.post("/api/contact", (req, res) => {
+app.post("/api/contact", async (req, res) => {
     try {
         const { firstName, lastName, email, phone, subject, message } = req.body;
 
-        if (!firstName || !email || !message) {
+        // Identify the logged-in user using the Supabase access token
+        let authenticatedUserId = null;
+
+        const authHeader = req.headers.authorization;
+
+        if (authHeader) {
+            if (!authHeader.startsWith("Bearer ")) {
+                return res.status(401).json({
+                    success: false,
+                    error: "Invalid authentication token."
+                });
+            }
+
+            const accessToken = authHeader.split(" ")[1];
+
+            const {
+                data: { user },
+                error: authError
+            } = await supabaseAdmin.auth.getUser(accessToken);
+
+            if (authError || !user) {
+                return res.status(401).json({
+                    success: false,
+                    error: "Unable to verify user authentication."
+                });
+            }
+
+            authenticatedUserId = user.id;
+        }
+
+
+        // Validate required fields
+        if (
+            !firstName?.trim() ||
+            !email?.trim() ||
+            !message?.trim()
+        ) {
             return res.status(400).json({
                 success: false,
                 error: "Missing required fields (firstName, email, message)"
@@ -127,8 +165,43 @@ app.post("/api/contact", (req, res) => {
         const recipientEmail = "primecontact@primetalker.com";
         const timestamp = new Date().toISOString();
 
+        // Save contact form submission in Supabase
+        const { data: savedSubmission, error: databaseError } =
+            await supabaseAdmin
+                .from("contact_submissions")
+                .insert({
+                    user_id: authenticatedUserId,
+                    first_name: firstName.trim(),
+                    last_name: lastName?.trim() || null,
+                    email: email.trim(),
+                    phone: phone?.trim() || null,
+                    subject: subject?.trim() || null,
+                    message: message.trim(),
+                    email_status: "pending"
+                })
+                .select("id")
+                .single();
+
+        if (databaseError) {
+            console.error(
+                "❌ Failed to save contact submission in Supabase:",
+                databaseError
+            );
+
+            return res.status(500).json({
+                success: false,
+                error: "Unable to save your message. Please try again."
+            });
+        }
+
+        console.log(
+            "✅ Contact submission saved in Supabase:",
+            savedSubmission.id
+        );
+
+
         const submissionData = {
-            id: uuidv4(),
+            id: savedSubmission.id,
             timestamp,
             recipientEmail,
             sender: {
@@ -136,49 +209,218 @@ app.post("/api/contact", (req, res) => {
                 email: email.trim(),
                 phone: phone ? phone.trim() : "N/A"
             },
-            subject: subject ? subject.trim() : "No Subject",
+            subject: subject?.trim() || "PrimeTalker Contact Us Enquiry",
             message: message.trim()
         };
 
-        // Format console output
+        // Log contact form submission
         console.log("\n====================================================");
         console.log("📩 NEW CONTACT FORM SUBMISSION RECEIVED");
-        console.log(`Target Recipient : ${submissionData.recipientEmail}`);
+        console.log(`Target Recipient : ${recipientEmail}`);
         console.log(`From             : ${submissionData.sender.name} <${submissionData.sender.email}>`);
         console.log(`Phone            : ${submissionData.sender.phone}`);
         console.log(`Subject          : ${submissionData.subject}`);
-        console.log(`Timestamp        : ${submissionData.timestamp}`);
+        console.log(`Timestamp        : ${timestamp}`);
         console.log("Message Content  :");
         console.log(submissionData.message);
         console.log("====================================================\n");
 
-        // Persist to local JSON log file
-        const logFilePath = path.join(__dirname, "contact_submissions.json");
-        let submissions = [];
-        if (fs.existsSync(logFilePath)) {
-            try {
-                submissions = JSON.parse(fs.readFileSync(logFilePath, "utf8"));
-            } catch (err) {
-                submissions = [];
-            }
-        }
-        submissions.push(submissionData);
-        fs.writeFileSync(logFilePath, JSON.stringify(submissions, null, 2), "utf8");
+        // Preserve existing local JSON logging
+        try {
+            const logFilePath = path.join(__dirname, "contact_submissions.json");
+            let submissions = [];
 
-        return res.json({
+            if (fs.existsSync(logFilePath)) {
+                try {
+                    submissions = JSON.parse(
+                        fs.readFileSync(logFilePath, "utf8")
+                    );
+                } catch (err) {
+                    submissions = [];
+                }
+            }
+
+            submissions.push(submissionData);
+
+            fs.writeFileSync(
+                logFilePath,
+                JSON.stringify(submissions, null, 2),
+                "utf8"
+            );
+        } catch (logError) {
+            console.error("Contact submission logging failed:", logError);
+        }
+
+        // Get Brevo API key from backend environment variables
+        const brevoApiKey = process.env.BREVO_API_KEY;
+
+        if (!brevoApiKey) {
+            console.error("BREVO_API_KEY is not configured.");
+
+            return res.status(500).json({
+                success: false,
+                error: "Email service is not configured."
+            });
+        }
+
+        // Escape user-provided content before inserting into HTML
+        const escapeHtml = (value) =>
+            String(value)
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/"/g, "&quot;")
+                .replace(/'/g, "&#039;");
+
+        // Prepare plain-text email
+        const emailBody = `
+Hello Prime Talker Team,
+
+A new message has been submitted through the Prime Talker Contact Us form.
+
+Name: ${submissionData.sender.name}
+Email Address: ${submissionData.sender.email}
+Phone Number: ${submissionData.sender.phone}
+
+Subject: ${submissionData.subject}
+
+Message:
+${submissionData.message}
+
+Submission ID: ${submissionData.id}
+Submitted At: ${timestamp}
+
+Thank you,
+Prime Talker Website
+        `.trim();
+
+        // Prepare HTML email
+        const htmlContent = `
+            <div style="font-family: Arial, sans-serif; color: #333; line-height: 1.6;">
+                <h2 style="color: #333;">New Contact Us Message</h2>
+
+                <p>A new message has been submitted through the Prime Talker website.</p>
+
+                <table style="border-collapse: collapse; width: 100%;">
+                    <tr>
+                        <td style="padding: 8px; font-weight: bold;">Name</td>
+                        <td style="padding: 8px;">${escapeHtml(submissionData.sender.name)}</td>
+                    </tr>
+                    <tr>
+                        <td style="padding: 8px; font-weight: bold;">Email</td>
+                        <td style="padding: 8px;">${escapeHtml(submissionData.sender.email)}</td>
+                    </tr>
+                    <tr>
+                        <td style="padding: 8px; font-weight: bold;">Phone</td>
+                        <td style="padding: 8px;">${escapeHtml(submissionData.sender.phone)}</td>
+                    </tr>
+                    <tr>
+                        <td style="padding: 8px; font-weight: bold;">Subject</td>
+                        <td style="padding: 8px;">${escapeHtml(submissionData.subject)}</td>
+                    </tr>
+                </table>
+
+                <h3>Message</h3>
+                <div style="padding: 12px; background: #f5f5f5; border-radius: 6px; white-space: pre-wrap;">${escapeHtml(submissionData.message)}</div>
+
+                <p style="font-size: 12px; color: #777;">
+                    Submission ID: ${submissionData.id}<br/>
+                    Submitted At: ${timestamp}
+                </p>
+            </div>
+        `;
+
+        // Send email directly using Brevo API
+        const brevoResponse = await fetch(
+            "https://api.brevo.com/v3/smtp/email",
+            {
+                method: "POST",
+                headers: {
+                    "accept": "application/json",
+                    "api-key": brevoApiKey,
+                    "content-type": "application/json"
+                },
+                body: JSON.stringify({
+                    sender: {
+                        name: "Prime Talker",
+                        email: recipientEmail
+                    },
+                    to: [
+                        {
+                            email: recipientEmail,
+                            name: "Prime Talker Team"
+                        }
+                    ],
+                    replyTo: {
+                        email: submissionData.sender.email,
+                        name: submissionData.sender.name
+                    },
+                    subject: submissionData.subject,
+                    textContent: emailBody,
+                    htmlContent: htmlContent
+                })
+            }
+        );
+
+        const brevoResult = await brevoResponse.json();
+
+        // Check Brevo API response
+
+        if (!brevoResponse.ok) {
+            console.error("Brevo email sending failed:", brevoResult);
+
+            // Update Supabase record when email sending fails
+            const { error: updateError } = await supabaseAdmin
+                .from("contact_submissions")
+                .update({ email_status: "failed" })
+                .eq("id", savedSubmission.id);
+
+            if (updateError) {
+                console.error(
+                    "❌ Failed to update contact email status:",
+                    updateError
+                );
+            }
+
+            return res.status(502).json({
+                success: false,
+                error: "Unable to send your message right now. Please try again later."
+            });
+        }
+
+        console.log("✅ Contact email accepted by Brevo.");
+        console.log("Brevo Message ID:", brevoResult.messageId);
+
+        // Update Supabase record after successful email delivery
+        const { error: updateError } = await supabaseAdmin
+            .from("contact_submissions")
+            .update({ email_status: "sent" })
+            .eq("id", savedSubmission.id);
+
+        if (updateError) {
+            console.error(
+                "❌ Failed to update contact email status:",
+                updateError
+            );
+        }
+
+
+        return res.status(200).json({
             success: true,
-            message: `Message queued and logged for ${recipientEmail}`,
-            recipientEmail,
+            message: "Your message has been sent successfully!",
             submissionId: submissionData.id
         });
+
     } catch (error) {
         console.error("❌ Error handling contact submission:", error);
+
         return res.status(500).json({
             success: false,
-            error: "Failed to process message"
+            error: "Failed to process your message."
         });
     }
 });
+
 // =====================================================
 // TWILIO VIDEO TOKEN
 // =====================================================
